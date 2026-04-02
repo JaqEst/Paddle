@@ -1,0 +1,19 @@
+{
+	global:
+		PyInit_*;
+		extern "C++" {
+			*paddle*;
+			*phi*;
+			*pir*;
+			*drr*;
+			*cinn*;
+			*common*;
+			*egr*;
+			*eager*;
+			PD_*;
+			*Pass*;
+			*profile*;
+		};
+	local:
+		*;
+};

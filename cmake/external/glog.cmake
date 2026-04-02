@@ -33,7 +33,7 @@ else()
   set(GLOG_LIBRARIES
       "${GLOG_INSTALL_DIR}/lib/libglog.a"
       CACHE FILEPATH "glog library." FORCE)
-  set(GLOG_CMAKE_CXX_FLAGS ${CMAKE_CXX_FLAGS})
+  set(GLOG_CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fvisibility=hidden")
 endif()
 
 include_directories(${GLOG_INCLUDE_DIR})
