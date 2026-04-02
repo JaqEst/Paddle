@@ -65,8 +65,8 @@ struct KernelKeySet {
 #endif
     std::size_t leading_zeros = detail::CountLeadingZeros(bitset_value);
     Backend selected_backend = static_cast<Backend>(32 - leading_zeros);
-    VLOG(8) << "GetHighestPriorityKernelKey: selected_backend = "
-            << selected_backend;
+    // VLOG(8) << "GetHighestPriorityKernelKey: selected_backend = "
+    //         << selected_backend;
 
     return phi::KernelKey(selected_backend, layout, dtype);
   }

@@ -393,6 +393,9 @@ void LibUVClient::doProcess(const uv_buf_t* buf, size_t nread) {
       case Command::WAIT:
         if (!doWaitCommand()) return;
         break;
+      case Command::DELETE:
+        if (!doDeleteCommand()) return;
+        break;
       default:
         VLOG(4) << "invalid command from Client, command: " << command;
         close();
@@ -410,6 +413,21 @@ bool LibUVClient::doSetCommand() {
   if (!stream.readContent(newData)) return false;
   VLOG(7) << "set key:" << key << " address:" << this->address();
   store->set(key, newData);
+  return true;
+}
+
+bool LibUVClient::doDeleteCommand() {
+  std::string key;
+  if (!stream.readKey(key)) return false;
+
+  VLOG(7) << "delete key:" << key << " address:" << this->address();
+  UVWriter sw(ptr());
+  if (store->deleteKey(key)) {
+    sw.writeValue(ReplyType::READY);
+  } else {
+    sw.writeValue(ReplyType::NOT_READY);
+  }
+  sw.send();
   return true;
 }
 
@@ -699,6 +717,14 @@ bool LibUVMasterDaemon::checkKeys(const std::vector<std::string>& keys) {
     }
     return false;
   });
+}
+
+bool LibUVMasterDaemon::deleteKey(const std::string& key) {
+  if (_tcp_store.find(key) != _tcp_store.end()) {
+    _tcp_store.erase(key);
+    return true;
+  }
+  return false;
 }
 
 bool LibUVMasterDaemon::waitKey(const std::string& key,

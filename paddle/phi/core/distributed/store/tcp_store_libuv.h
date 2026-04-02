@@ -140,6 +140,7 @@ class PADDLE_API LibUVMasterDaemon : public DaemonThread {
   bool waitKey(const std::string& key,
                const std::shared_ptr<LibUVHandle>& client);
   bool checkKeys(const std::vector<std::string>& keys);
+  bool deleteKey(const std::string& key);
   // client
   void addClient(const std::shared_ptr<LibUVHandle>& client);
   void removeClient(const std::shared_ptr<LibUVHandle>& client);
@@ -229,6 +230,7 @@ class PADDLE_API LibUVClient : public LibUVTCPSocket {
   bool doAddCommand();
   bool doCheckCommand();
   bool doWaitCommand();
+  bool doDeleteCommand();
   void onClose() override;
 
  public:
