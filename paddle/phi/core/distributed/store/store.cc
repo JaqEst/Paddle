@@ -42,6 +42,10 @@ void Store::set(const std::string& key, const std::vector<uint8_t>& value) {
       errors::InvalidArgument("Implement the set method in the subclass."));
 }
 
+void Store::set(const std::string& key, const std::string& value) {
+  set(key, std::vector<uint8_t>(value.begin(), value.end()));
+}
+
 bool Store::deleteKey(const std::string& key) {
   PADDLE_THROW(
       errors::InvalidArgument("Implement the deleteKey method in the subclass."));

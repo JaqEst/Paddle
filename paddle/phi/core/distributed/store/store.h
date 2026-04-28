@@ -33,6 +33,7 @@ class PADDLE_API Store {
   virtual bool check(const std::string& key);
   virtual void wait(const std::string& key);
   virtual void set(const std::string& key, const std::vector<uint8_t>& value);
+  void set(const std::string& key, const std::string& value);
   virtual bool deleteKey(const std::string& key);
 
   virtual int timeout() { return _timeout; }
