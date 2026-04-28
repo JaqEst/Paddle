@@ -666,10 +666,6 @@ if(WITH_PYTHON)
 
   if(NOT APPLE AND NOT WIN32)
     target_link_libraries(${SHARD_LIB_NAME} rt)
-    # Hide third-party symbols (e.g. glog/google) to avoid conflicts
-    # when other libraries link their own versions.
-    target_link_options(${SHARD_LIB_NAME} PRIVATE
-      "-Wl,--version-script=${CMAKE_CURRENT_SOURCE_DIR}/paddle_pybind.map")
   endif()
 
   if(WITH_ROCM)
