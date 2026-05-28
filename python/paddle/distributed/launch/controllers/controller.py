@@ -60,6 +60,7 @@ class ControllerBase:
         self.ctx.set_envs({"POD_NAME": self.pod.name})
 
         self.join_server = None
+        self._reported_failed_containers = set()
 
     def deploy_pod(self):
         assert len(self.pod.containers) + len(self.pod.init_containers) > 0, (
@@ -74,6 +75,7 @@ class ControllerBase:
 
         self.save_pod_env()
         self.ctx.status.run()
+        self._reported_failed_containers.clear()
         self.pod.deploy()
 
     def run(self):
@@ -93,11 +95,16 @@ class ControllerBase:
         self.ctx.logger.info(f"Watching {self.pod}")
 
         while not self.ctx.status.is_done():
-            status = self.pod.watch(timeout=2)
+            status = self.pod.watch(
+                timeout=2,
+                fault_tolerant=self.ctx.args.enable_fault_tolerant,
+            )
 
             # if self.ctx.continuous_log():
             # default to print log
             self.pod.logs()
+            if self.ctx.args.enable_fault_tolerant:
+                self._report_failed_containers()
 
             # completed
             if status == self.ctx.status.COMPLETED:
@@ -120,7 +127,7 @@ class ControllerBase:
 
                 fc = self.pod.failed_container()
                 self.ctx.logger.info(f"Pod {status}")
-                self.ctx.logger.error(f"Container failed !!!\n{fc[0]}")
+                self._report_failed_containers()
                 self.ctx.logger.info(
                     "------------------------- ERROR LOG DETAIL -------------------------"
                 )
@@ -145,6 +152,14 @@ class ControllerBase:
 
                 self.pod.stop(timeout=30)
                 return False
+
+    def _report_failed_containers(self):
+        for c in self.pod.failed_container():
+            if id(c) in self._reported_failed_containers:
+                continue
+
+            self._reported_failed_containers.add(id(c))
+            self.ctx.logger.error(f"Container failed !!!\n{c}")
 
     def stop(self, sigint=None):
         self.ctx.logger.debug("Controller stop")

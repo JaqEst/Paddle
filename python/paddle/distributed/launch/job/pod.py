@@ -54,11 +54,7 @@ class Pod(PodSpec):
         )
 
     def failed_container(self):
-        cs = []
-        for c in self._containers:
-            if c.status == Status.FAILED:
-                cs.append(c)
-        return cs
+        return [c for c in self._containers if c.status == Status.FAILED]
 
     @property
     def name(self):
@@ -194,6 +190,7 @@ class Pod(PodSpec):
         any_list=[Status.FAILED],
         interval=1,
         timeout=-1,
+        fault_tolerant=False,
     ):
         '''
         watch return if any container status in any_list
@@ -201,12 +198,23 @@ class Pod(PodSpec):
         '''
         end = time.time() + timeout
         while timeout < 0 or time.time() < end:
-            for c in self._init_containers + self._containers:
+            containers = self._init_containers
+            if not fault_tolerant:
+                containers = containers + self._containers
+            for c in containers:
                 if c.status in any_list:
                     return c.status
 
             s = [c.status for c in self._init_containers + self._containers]
             if len(set(s)) == 1 and s[0] in all_list:
                 return s[0]
+
+            if fault_tolerant:
+                runtime_status = [c.status for c in self._containers]
+                failed_status = next((s for s in runtime_status if s in any_list), None)
+                if failed_status is not None and not any(
+                    s == Status.RUNNING for s in runtime_status
+                ):
+                    return failed_status
 
             time.sleep(interval)

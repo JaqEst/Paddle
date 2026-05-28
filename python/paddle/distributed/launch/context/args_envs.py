@@ -106,6 +106,14 @@ def parse_args():
     )
 
     base_group.add_argument(
+        "--enable-fault-tolerant",
+        dest="enable_fault_tolerant",
+        action="store_true",
+        default=False,
+        help="keep the pod running when one worker fails and other workers are still running. Default False",
+    )
+
+    base_group.add_argument(
         "--nnodes",
         type=str,
         default="1",
