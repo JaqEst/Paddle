@@ -25,10 +25,10 @@ if TYPE_CHECKING:
 
 
 class PodSpec:
-    def __init__(self):
+    def __init__(self, name: str | None = None):
         self._name = ''.join(
             random.choice('abcdefghijklmnopqrstuvwxyz') for _ in range(6)
-        )
+        ) if name is None else name
 
         # by controller
         self._init_containers: list[Container] = []
@@ -45,8 +45,8 @@ class PodSpec:
 
 
 class Pod(PodSpec):
-    def __init__(self):
-        super().__init__()
+    def __init__(self, name: str | None = None):
+        super().__init__(name)
 
     def __str__(self):
         return (

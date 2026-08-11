@@ -129,6 +129,7 @@ class CollectiveController(Controller):
                 "PADDLE_GLOBAL_RANK": f"{i + rank_offset}",
                 "PADDLE_LOCAL_RANK": f"{i}",
                 "PADDLE_NNODES": f"{len(ips)}",
+                "PADDLE_NODE_RANK": f"{ips.index(self.ctx.node.ip)}",
                 # compatible env
                 "PADDLE_CURRENT_ENDPOINT": job_endpoints[i + rank_offset],
                 "PADDLE_TRAINER_ID": f"{i + rank_offset}",
@@ -176,16 +177,27 @@ class CollectiveController(Controller):
             )
         ]
 
-        data = json.dumps(
-            {
-                'name': self.pod.name,
-                'rank': self.pod.rank,
-                'replicas': self.pod.replicas,
-                'dtype': self.ctx.node.device.dtype,
-                'candidate': f'{self.ctx.node.ip}:{port}',
-                'endpoints': ",".join(endpoints),
+        data = {
+            'name': self.pod.name,
+            'rank': self.pod.rank,
+            'replicas': self.pod.replicas,
+            'dtype': self.ctx.node.device.dtype,
+            'candidate': f'{self.ctx.node.ip}:{port}',
+            'endpoints': ",".join(endpoints),
+        }
+
+        if self.ctx.args.gather_option_keys:
+            option_keys= self.ctx.args.gather_option_keys.split(',')
+            training_args = self.ctx.args.training_script_args
+            options = {
+                key: [
+                    str(training_args[training_args.index(f"--{key}") + 1])
+                ] * self.pod.replicas
+                for key in option_keys
             }
-        )
+            data['options'] = options
+
+        data = json.dumps(data)
 
         peer_list, rank = self.master.sync_peers(
             f'/{self.job.id}/info',
@@ -223,6 +235,13 @@ class CollectiveController(Controller):
         selected_dev_list = self.ctx.node.device.get_selected_devices(
             self.ctx.args.devices
         )
+
+        if self.ctx.args.gather_option_keys:
+            job_options = {
+                key: [v for i in peer_list for v in i['options'][key]]
+                for key in option_keys
+            }
+
         for i in range(self.pod.replicas):
             e = {
                 "PADDLE_MASTER": collective_master,
@@ -231,6 +250,7 @@ class CollectiveController(Controller):
                 "PADDLE_GLOBAL_RANK": f"{i + rank_offset}",
                 "PADDLE_LOCAL_RANK": f"{i}",
                 "PADDLE_NNODES": f"{self.job.replicas}",
+                "PADDLE_NODE_RANK": f"{self.pod.rank}",
                 # compatible env
                 "PADDLE_CURRENT_ENDPOINT": endpoints[i],
                 "PADDLE_TRAINER_ID": f"{i + rank_offset}",
@@ -256,6 +276,12 @@ class CollectiveController(Controller):
                     e.update({selected_dev_key: selected_dev_list[i]})
             else:
                 e.update({'PADDLE_DISTRI_BACKEND': 'gloo'})
+
+            if self.ctx.args.gather_option_keys:
+                e.update({
+                    f"GATHERED_{key.upper()}": ",".join(value)
+                    for key, value in job_options.items()
+                })
 
             # log_file = "{}.{}.{}.log".format(self.job.id, self.pod.name, i)
             log_file = f"workerlog.{i}"

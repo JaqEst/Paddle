@@ -114,6 +114,23 @@ def parse_args():
     )
 
     base_group.add_argument(
+        "--launch-control-sock",
+        type=str,
+        default=None,
+        help="Unix domain socket path for external launch control commands. Default None",
+    )
+
+    base_group.add_argument(
+        "--gather_option_keys",
+        type=str,
+        default=None,
+        help="Gather options from ``training_script_args``. "
+        "Keys should be seperated by ','. "
+        "Only available when ``--master`` is set. "
+        "Default None",
+    )
+
+    base_group.add_argument(
         "--nnodes",
         type=str,
         default="1",
@@ -145,6 +162,13 @@ def parse_args():
         type=str,
         default="default",
         help="unique id of the job. Default default",
+    )
+
+    base_group.add_argument(
+        "--pod_name",
+        type=str,
+        default=None,
+        help="current pod name. Default None",
     )
 
     base_group.add_argument(

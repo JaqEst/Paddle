@@ -20,6 +20,7 @@ import sys
 from paddle.distributed.launch.job.container import Container
 from paddle.distributed.launch.job.job import Job
 from paddle.distributed.launch.job.pod import Pod
+from paddle.distributed.launch.utils.control_socket import ControlSocketServer
 
 from .master import Master
 from .watcher import Watcher
@@ -55,12 +56,14 @@ class ControllerBase:
             mode=self.ctx.args.run_mode,
             jid=self.ctx.args.job_id,
         )
-        self.pod = Pod()
+        self.pod = Pod(self.ctx.args.pod_name)
 
         self.ctx.set_envs({"POD_NAME": self.pod.name})
 
         self.join_server = None
         self._reported_failed_containers = set()
+
+        self.control_server = ControlSocketServer(self.ctx.args.launch_control_sock)
 
     def deploy_pod(self):
         assert len(self.pod.containers) + len(self.pod.init_containers) > 0, (
@@ -83,6 +86,7 @@ class ControllerBase:
         self.build_pod()
 
         self.deploy_pod()
+        self.control_server.start()
 
         self.watch()
 
@@ -95,6 +99,8 @@ class ControllerBase:
         self.ctx.logger.info(f"Watching {self.pod}")
 
         while not self.ctx.status.is_done():
+            self.control_server.poll(self._control_command_handler)
+
             status = self.pod.watch(
                 timeout=2,
                 fault_tolerant=self.ctx.args.enable_fault_tolerant,
@@ -161,16 +167,62 @@ class ControllerBase:
             self._reported_failed_containers.add(id(c))
             self.ctx.logger.error(f"Container failed !!!\n{c}")
 
+    def _control_command_handler(self, command):
+        if command["action"] == "recover":
+            return self._recover_containers(command["container_ids"])
+        if command["action"] == "ranks":
+            return self._container_ranks()
+
+    def _container_ranks(self):
+        """Report the global rank of every container managed by this pod."""
+        return {
+            "ranks": [
+                int(c.env["PADDLE_TRAINER_ID"]) for c in self.pod.containers
+            ]
+        }
+
+    def _recover_containers(self, container_ids):
+        if not self.ctx.args.enable_fault_tolerant:
+            return {"message": "recover requires enable_fault_tolerant"}
+
+        if isinstance(container_ids, int):
+            container_ids = [container_ids]
+
+        recover_ranks_in_global = []
+        for container_id in container_ids:
+            container_id = int(container_id)
+
+            if container_id < 0 or container_id >= len(self.pod.containers):
+                continue
+
+            container = self.pod.containers[container_id]
+            if container.status == self.ctx.status.RUNNING:
+                continue
+
+            container.terminate(force=True)
+            if "--is_extension" not in container.entrypoint:
+                container.entrypoint.append("--is_extension")
+            container.log_mode = 'a'
+            container.start()
+            recover_ranks_in_global.append(int(container.env["PADDLE_TRAINER_ID"]))
+            self._reported_failed_containers.discard(id(container))
+            self.ctx.logger.info(f"Recover container {container_id}: {container}")
+
+        return {"recover_ranks": recover_ranks_in_global}
+
     def stop(self, sigint=None):
         self.ctx.logger.debug("Controller stop")
 
         self.watcher.stop()
+
+        self.control_server.close()
 
         self.master.stop()
         self.pod.stop(timeout=30)
 
     def finalize(self, exit=True):
         self.pod.join()
+        self.control_server.close()
         self.master.stop()
 
         self.ctx.logger.info(f"Exit code {self.pod.exit_code}")
