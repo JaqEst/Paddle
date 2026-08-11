@@ -212,6 +212,7 @@ class Fleet:
         self._role_maker = None
         self.strategy_compiler: StrategyCompiler | None = None
         self._is_collective = False
+        self._comm_group_mode = "full"
         self._runtime_handle = None
         self._util = None
         self._context = {}
@@ -223,6 +224,8 @@ class Fleet:
         is_collective: bool = False,
         strategy: DistributedStrategy | None = None,
         log_level: int | str = "INFO",
+        comm_group_mode: str = "full",
+        pg_options = None,
     ) -> Self:
         """
         Initialize role_maker in Fleet.
@@ -243,6 +246,9 @@ class Fleet:
                 For details, please refer to paddle.distributed.fleet.DistributedStrategy. Default: None.
             log_level (Integer, String, optional): A ``Integer`` or ``String`` Variable determining how height
                 the logging level is. Default is "INFO".
+            comm_group_mode (String, optional): Communication group initialization mode. ``full`` keeps
+                the current eager initialization behavior, and ``minimal`` lazily creates hybrid
+                communication groups when they are requested. Default is "full".
 
         Returns:
             None
@@ -310,6 +316,13 @@ class Fleet:
                 )
         self._role_maker._generate_role()
 
+        if comm_group_mode not in {"full", "minimal"}:
+            raise ValueError(
+                "comm_group_mode must be one of {'full', 'minimal'}, "
+                f"but got {comm_group_mode}"
+            )
+        self._comm_group_mode = comm_group_mode
+
         from paddle.distributed import fleet
 
         fleet.util._set_role_maker(self._role_maker)
@@ -337,7 +350,7 @@ class Fleet:
                 paddle.distributed.init_parallel_env(
                     self._user_defined_strategy.hybrid_configs[
                         "default_comm_group_configs"
-                    ].nccl_config
+                    ].nccl_config, pg_options
                 )
 
             # hybrid parallel not support for npu/xpu
@@ -684,14 +697,19 @@ class Fleet:
         ):
             # for expert parallel in MoE model
             hcg = tp.EPHybridCommunicateGroup(
-                hybrid_group_names, dims, self.hybrid_configs
+                hybrid_group_names,
+                dims,
+                self.hybrid_configs,
+                comm_group_mode=self._comm_group_mode,
             )
             self._topology = hcg._dense_topo
             return hcg
         else:
             self._topology = tp.CommunicateTopology(hybrid_group_names, dims)
             return tp.HybridCommunicateGroup(
-                self._topology, self.hybrid_configs
+                self._topology,
+                self.hybrid_configs,
+                comm_group_mode=self._comm_group_mode,
             )
 
     def _init_hybrid_parallel_env(self):

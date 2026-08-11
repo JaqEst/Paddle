@@ -30,6 +30,7 @@ from contextlib import closing
 import paddle.utils.cpp_extension.extension_utils as utils
 from paddle import framework
 from paddle.utils import strtobool
+from paddle.distributed.backend_registry import is_process_group_backend
 
 logger = logging.getLogger("root")
 logger.propagate = False
@@ -1936,19 +1937,12 @@ class ParameterServerLauncher:
 
 
 def check_backend(backend):
-    if backend not in [
-        'nccl',
-        'gloo',
-        'bkcl',
-        'auto',
-        'heter',
-        'xccl',
-        'flagcx',
-    ]:
+    if backend != 'auto' and not is_process_group_backend(backend):
         raise ValueError(
             "paddle.distributed initialize error, "
             "backend argument can only be one of "
-            "'nccl', 'gloo', 'bkcl', 'auto', 'heter', 'xccl' "
+            "'nccl', 'gloo', 'bkcl', 'auto', 'heter', 'xccl', 'flagcx' "
+            "or a registered custom backend "
             f"but got {backend}"
         )
 

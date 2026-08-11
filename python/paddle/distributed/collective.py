@@ -28,6 +28,12 @@ import paddle
 from paddle.base import core
 from paddle.framework import in_dynamic_mode
 
+from .backend_registry import (  # noqa: F401
+    get_process_group_backend_factory,
+    is_process_group_backend,
+    register_process_group_backend,
+    unregister_process_group_backend,
+)
 from .communication.group import Group, _add_new_group, is_initialized
 from .fleet.layers.mpu.mp_ops import (  # noqa: F401
     _c_concat,
@@ -78,7 +84,6 @@ _group_map_backend = {}
 # Name of the default group for init_parallel_env
 _default_group_name = "_default_pg"
 
-_valid_backend_list = ['nccl', 'gloo', 'heter', 'xccl', 'bkcl', 'flagcx']
 _default_store = None  # the default tcp store
 _default_backend = None
 _default_timeout = datetime.timedelta(seconds=1800)
@@ -164,7 +169,6 @@ def _new_process_group_impl(
 ):
     pg = None
     genv = _get_global_env()
-    assert backend in _valid_backend_list, f"Unsupported backend: {backend}."
     if backend == "gloo":
         pg = core.ProcessGroupGloo.create(store, rank, world_size, group_id)
     elif backend == "nccl":
@@ -192,6 +196,22 @@ def _new_process_group_impl(
             genv.pg_timeout,
             nccl_comm_init_option,
         )
+    else:
+        factory = get_process_group_backend_factory(backend)
+        if factory is None:
+            raise RuntimeError(
+                f"No process group backend factory registered for backend: {backend}."
+            )
+        pg = factory(
+            store,
+            rank,
+            world_size,
+            group_id,
+            pg_options,
+            group_name=group_name,
+            nccl_comm_init_option=nccl_comm_init_option,
+            nccl_config=nccl_config,
+        )
     return pg
 
 
@@ -208,10 +228,11 @@ def _set_custom_gid(gid):
 
 def new_group(
     ranks: list[int] | None = None,
-    backend: Literal['nccl'] | None = None,
+    backend: str | None = None,
     timeout: datetime.timedelta = _default_timeout,
     nccl_comm_init_option: int = 0,
     nccl_config: NCCLConfig | None = None,
+    pg_options=None,
 ) -> Group:
     """
 
@@ -219,8 +240,9 @@ def new_group(
 
     Args:
         ranks (list): The global ranks of group members.
-        backend (str): The backend used to create group, only nccl is supported now.
+        backend (str): The backend used to create group. Defaults to the backend selected by init_parallel_env.
         timeout (datetime.timedelta, optional): The waiting timeout for store relevant options, default is 30 minutes.
+        pg_options (Any, optional): Backend-specific process group options.
 
     Returns:
         Group: The group instance.
@@ -264,7 +286,7 @@ def new_group(
                 rank,
                 size,
                 group_name,
-                pg_options=None,
+                pg_options=pg_options,
                 group_id=gid,
                 nccl_comm_init_option=nccl_comm_init_option,
                 nccl_config=nccl_config,

@@ -31,6 +31,7 @@ import numpy as np
 import paddle
 from paddle import _legacy_C_ops, framework
 from paddle.base.core import get_all_custom_device_type
+from paddle.distributed.backend_registry import is_process_group_backend
 from paddle.distributed.collective import (
     Group,
     _default_group_name,
@@ -41,7 +42,6 @@ from paddle.distributed.collective import (
     _set_group_map,
     _set_group_map_backend,
     _set_group_map_by_name,
-    _valid_backend_list,
 )
 from paddle.distributed.communication.group import (
     _add_new_group,
@@ -956,14 +956,19 @@ def _start_kv_server(port, http_server_d, size):
 
 def _is_cpuonly(backend):
     check_backend(backend)
+    if backend == 'gloo':
+        return True
     if (
         backend in ['auto', 'nccl', 'bkcl', 'heter', 'flagcx']
         and (core.is_compiled_with_cuda() or core.is_compiled_with_xpu())
     ) or backend == 'xccl':
         # passes 'auto' and can use cuda or xpu, use the default logics. so return False
         return False
-    else:
-        return True
+    if is_process_group_backend(backend) and (
+        core.is_compiled_with_cuda() or core.is_compiled_with_xpu()
+    ):
+        return False
+    return True
 
 
 def _check_var_exists(var_name):
@@ -1000,7 +1005,10 @@ def _print_modified_flags(modified_flags):
         )
 
 
-def init_parallel_env(nccl_config: NCCLConfig | None = None) -> Group:
+def init_parallel_env(
+    nccl_config: NCCLConfig | None = None,
+    pg_options=None,
+) -> Group:
     """
 
     Initialize parallel training environment in dynamic graph mode.
@@ -1012,6 +1020,7 @@ def init_parallel_env(nccl_config: NCCLConfig | None = None) -> Group:
         backend (string): A string represents the backend used by DataParallel,
             should be one of 'gloo'(for cpu), 'nccl'(for cuda), 'bkcl'(for xpu), 'auto'(auto detect).
             The auto detection prefer 'nccl', 'bkcl' than 'gloo'.
+        pg_options (Any, optional): Backend-specific process group options.
 
     Returns:
         None
@@ -1125,10 +1134,12 @@ def init_parallel_env(nccl_config: NCCLConfig | None = None) -> Group:
     elif core.is_compiled_with_xpu():
         place = core.XPUPlace(parallel_env.device_id)
     _set_expected_place(place)
+    if in_dynamic_mode():
+        core.eager_set_device_id()
 
     group = None
 
-    if backend in _valid_backend_list and in_dynamic_mode():
+    if is_process_group_backend(backend) and in_dynamic_mode():
         if _default_group_name in _get_group_map_by_name():
             return _get_group_map_by_name()[_default_group_name]
         _set_default_backend(backend)
@@ -1178,7 +1189,7 @@ def init_parallel_env(nccl_config: NCCLConfig | None = None) -> Group:
             rank,
             world_size,
             _default_group_name,
-            pg_options=None,
+            pg_options=pg_options,
             nccl_config=message2nccl_config(
                 nccl_config,
                 "default",

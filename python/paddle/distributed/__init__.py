@@ -79,6 +79,8 @@ from .auto_parallel.process_mesh import ProcessMesh
 from .collective import (
     is_available,
     new_group,
+    register_process_group_backend,
+    unregister_process_group_backend,
     restart_process_group,
     shutdown_process_group,
     split,
@@ -159,6 +161,8 @@ __all__ = [
     "broadcast_object_list",
     "ParallelEnv",
     "new_group",
+    "register_process_group_backend",
+    "unregister_process_group_backend",
     "shutdown_process_group",
     "restart_process_group",
     "init_parallel_env",

@@ -269,7 +269,11 @@ class HybridCommunicateGroup:
         self,
         topology: CommunicateTopology,
         hybrid_configs: NCCLConfig_Message | None = None,
+        comm_group_mode: Literal["full", "minimal"] = "full",
     ) -> None:
+        global _HYBRID_PARALLEL_GROUP
+        self._comm_group_mode = comm_group_mode
+
         self.nranks = paddle.distributed.get_world_size()
         self.global_rank = paddle.distributed.get_rank()
         self._topo = topology
@@ -286,9 +290,23 @@ class HybridCommunicateGroup:
         self._sep_parallel_id = self._get_sep_parallel_id()
         self.stage_id = self._get_pipe_parallel_id()
 
+        self.is_first_stage = self.stage_id == 0
+        self.is_last_stage = self.stage_id == (self._pp_degree - 1)
+        if self._pp_degree > 1:
+            self._set_p2p_prev_next()
+
         assert self._check_valid_topo(), (
             f"nranks: {self.nranks}, mp_num: {self._mp_degree}, sharding_num: {self._sharding_degree}, pp_num: {self._pp_degree}, dp_num: {self._dp_degree}, sep_num: {self._sep_degree}"
         )
+
+        if self._comm_group_mode == "minimal":
+            logger.info(
+                f"HybridParallelInfo: rank_id: {self.global_rank}, mp_degree: {self._mp_degree}, "
+                f"sharding_degree: {self._sharding_degree}, pp_degree: {self._pp_degree}, "
+                f"dp_degree: {self._dp_degree}, sep_degree: {self._sep_degree}, comm_group_mode: minimal"
+            )
+            _HYBRID_PARALLEL_GROUP = self
+            return
 
         # create comm group for pipe parallel
         self._pp_group, self._pp_comm_group = self._set_comm_group(
@@ -429,15 +447,10 @@ class HybridCommunicateGroup:
                 ),
             )
 
-        # create p2p group
-        self.is_first_stage = self.stage_id == 0
-        self.is_last_stage = self.stage_id == (self._pp_degree - 1)
-
         # create p2p_groups
         if self._pp_degree > 1:
             if paddle.framework.core.is_compiled_with_nccl():
                 check_nccl_version_for_p2p()
-            self._set_p2p_prev_next()
             if _use_four_directions:
                 self._set_four_directions_p2p_group()
 
@@ -447,8 +460,6 @@ class HybridCommunicateGroup:
         )
         debug_str += f", mp_group: {self._mp_group},  sharding_group: {self._sharding_group}, pp_group: {self._pp_group}, dp_group: {self._dp_group}, sep:group: {self._sep_group}, check/clip group: {self._check_group}"
         logger.info(debug_str)
-
-        global _HYBRID_PARALLEL_GROUP
         _HYBRID_PARALLEL_GROUP = self
 
     def get_parallel_mode(self) -> Literal[0, 1, 2, 3, 4]:
@@ -638,10 +649,11 @@ class HybridCommunicateGroup:
         return self._dp_degree
 
     def get_data_parallel_group(self) -> Group:
+        self._check_comm_group_available("dp_group")
         return self._dp_comm_group
 
     def get_data_parallel_group_src_rank(self) -> int:
-        return self._dp_comm_group.ranks[0]
+        return self.get_data_parallel_group().ranks[0]
 
     # model parallel message:
     def _get_model_parallel_id(self) -> str:
@@ -654,10 +666,11 @@ class HybridCommunicateGroup:
         return self._mp_degree
 
     def get_model_parallel_group(self) -> Group:
+        self._check_comm_group_available("mp_group")
         return self._mp_comm_group
 
     def get_model_parallel_group_src_rank(self) -> int:
-        return self._mp_comm_group.ranks[0]
+        return self.get_model_parallel_group().ranks[0]
 
     # pipeline parallel message
     def _get_pipe_parallel_id(self) -> int:
@@ -680,19 +693,22 @@ class HybridCommunicateGroup:
 
     def get_sep_parallel_group(self) -> Group:
         self._check_sep_exist()
+        self._check_comm_group_available("sep_group")
         return self._sep_comm_group
 
     def get_sep_parallel_group_src_rank(self) -> int:
         self._check_sep_exist()
-        return self._sep_comm_group.ranks[0]
+        return self.get_sep_parallel_group().ranks[0]
 
     def get_pipe_parallel_group(self) -> Group:
+        self._check_comm_group_available("pp_group")
         return self._pp_comm_group
 
     def get_p2p_groups(self) -> tuple[Group, Group, Group, Group]:
         assert _use_four_directions, (
             "If you want to use four directions p2p group, set the environment variable PADDLE_USE_FOUR_DIRECTIONS_P2P to True."
         )
+        self._check_comm_group_available("p2p_group")
         return (
             self.send_next_group,
             self.send_prev_group,
@@ -711,14 +727,16 @@ class HybridCommunicateGroup:
         return self._sharding_degree
 
     def get_sharding_parallel_group(self) -> Group:
+        self._check_comm_group_available("sharding_group")
         return self._sharding_comm_group
 
     def get_sharding_parallel_group_src_rank(self) -> int:
         # TODO should the src rank related to the shard rank for each parameter ?
-        return self._sharding_comm_group.ranks[0]
+        return self.get_sharding_parallel_group().ranks[0]
 
     # check parallel group
     def get_check_parallel_group(self, sharding: bool = False) -> Group:
+        self._check_comm_group_available("check_group")
         if sharding:
             return self.sharding_check_comm_group
         else:
@@ -732,10 +750,12 @@ class HybridCommunicateGroup:
     # fuse comm group message
     def get_dp_sep_parallel_group(self) -> Group:
         self._check_sep_exist()
+        self._check_comm_group_available("dp_sep_group")
         return self._dp_sep_comm_group
 
     def get_pp_mp_parallel_group(self) -> Group:
         self._check_sep_exist()
+        self._check_comm_group_available("pp_mp_group")
         return self._pp_mp_comm_group
 
     def get_moe_sharding_parallel_world_size(self) -> int:
@@ -774,6 +794,13 @@ class HybridCommunicateGroup:
         else:
             return parallel_group[0], parallel_comm_group[0]
 
+    def _check_comm_group_available(self, group_name: str) -> None:
+        if self._comm_group_mode == "minimal":
+            raise RuntimeError(
+                f"{group_name} is not created when comm_group_mode='minimal'. "
+                "Use comm_group_mode='full' or create the required group explicitly."
+            )
+
 
 class EPHybridCommunicateGroup(HybridCommunicateGroup):
     def __init__(
@@ -790,7 +817,11 @@ class EPHybridCommunicateGroup(HybridCommunicateGroup):
         ],
         dims: list[int] = [1, 1, 1, 1, 1, 1, 1, 1],
         hybrid_configs: NCCLConfig_Message | None = None,
+        comm_group_mode: Literal["full", "minimal"] = "full",
     ) -> None:
+        global _HYBRID_PARALLEL_GROUP
+        self._comm_group_mode = comm_group_mode
+
         self.nranks = paddle.distributed.get_world_size()
         self.global_rank = paddle.distributed.get_rank()
 
@@ -872,12 +903,18 @@ class EPHybridCommunicateGroup(HybridCommunicateGroup):
         self._cp_sharding_degree = self._cp_topo.get_dim("cp_sharding")
 
         self.stage_id = self._get_parallel_id(self._moe_topo, "pipe")
+        self.is_first_stage = self.stage_id == 0
+        self.is_last_stage = self.stage_id == (self._pp_degree - 1)
+
         self._expert_parallel_id = self._get_parallel_id(
             self._moe_topo, "expert"
         )
         self._moe_sharding_parallel_id = self._get_parallel_id(
             self._moe_topo, "moe_sharding"
         )
+
+        if self._pp_degree > 1:
+            self._set_p2p_prev_next()
 
         assert self._moe_pp_degree == self._pp_degree, (
             f"Mismatch moe_pp_degree:{self._moe_pp_degree}, pp_degree:{self._pp_degree}."
@@ -888,6 +925,19 @@ class EPHybridCommunicateGroup(HybridCommunicateGroup):
         assert self._sep_degree == 1 and self._dp_degree == 1, (
             f"sep_degree {self._sep_degree} and dp_degree {self._dp_degree} must be 1 in MoE."
         )
+
+        if self._comm_group_mode == "minimal":
+            self._cp_parallel_id = self.find_context_parallel_id(self._dense_topo)
+            assert self._cp_parallel_id is not None
+            self._cp_sharding_parallel_id = self.find_context_sharding_parallel_id(self._dense_topo)
+            assert self._cp_sharding_parallel_id is not None
+            logger.info(
+                f"HybridParallelInfo: rank_id: {self.global_rank}, mp_degree: {self._mp_degree}, "
+                f"sharding_degree: {self._sharding_degree}, pp_degree: {self._pp_degree}, dp_degree: {self._dp_degree}, sep_degree: {self._sep_degree}, "
+                f"cp_degree: {self._cp_degree}, ep_degree: {self._ep_degree}, moe_sharding_degree: {self._moe_sharding_degree}, comm_group_mode: minimal"
+            )
+            _HYBRID_PARALLEL_GROUP = self
+            return
 
         self._pp_group, self._pp_comm_group = self._set_comm_group(
             "pipe",
@@ -1031,7 +1081,7 @@ class EPHybridCommunicateGroup(HybridCommunicateGroup):
                 )
             )
 
-        self._cp_parallel_id = self._cp_group.index(self.global_rank)
+        self._cp_parallel_id = self._get_context_parallel_id()
 
         self._cp_sharding_group, self._cp_sharding_comm_group = (
             self.build_context_sharding_group(
@@ -1078,15 +1128,10 @@ class EPHybridCommunicateGroup(HybridCommunicateGroup):
             )
         )
 
-        # create p2p group
-        self.is_first_stage = self.stage_id == 0
-        self.is_last_stage = self.stage_id == (self._pp_degree - 1)
-
         # create p2p_groups
         if self._pp_degree > 1:
             if paddle.framework.core.is_compiled_with_nccl():
                 check_nccl_version_for_p2p()
-            self._set_p2p_prev_next()
             if _use_four_directions:
                 self._set_four_directions_p2p_group()
 
@@ -1098,8 +1143,6 @@ class EPHybridCommunicateGroup(HybridCommunicateGroup):
         )
         debug_str += f", mp_group: {self._mp_group},  sharding_group: {self._sharding_group}, pp_group: {self._pp_group}, dp_group: {self._dp_group}, sep_group: {self._sep_group}, cp_group: {self._cp_group}, cp_sharding_group: {self._cp_sharding_group}, cp_mp_group: {self._cp_mp_group}, check/clip group: {self._check_group}, ep_group: {self._ep_group}, moe_sharding_group: {self._moe_sharding_group}."
         logger.info(debug_str)
-
-        global _HYBRID_PARALLEL_GROUP
         _HYBRID_PARALLEL_GROUP = self
 
     def _check_valid_topo(self) -> bool:
@@ -1249,6 +1292,13 @@ class EPHybridCommunicateGroup(HybridCommunicateGroup):
         )
         return parallel_group, parallel_comm_group
 
+    def find_context_parallel_id(self, topo):
+        parallel_groups = self.split_context_comm_list(topo)
+        for group in parallel_groups:
+            if self.global_rank in group:
+                return group.index(self.global_rank)
+        return None
+
     def build_context_sharding_group(self, topo, nccl_config=None):
         group_nccl_comm_init_option = 0
         parallel_groups = self.split_context_sharding_comm_list(topo)
@@ -1269,6 +1319,13 @@ class EPHybridCommunicateGroup(HybridCommunicateGroup):
             f"Total {self._cp_sharding_degree} context sharding parallel comm group(s) create successfully!"
         )
         return parallel_group, parallel_comm_group
+
+    def find_context_sharding_parallel_id(self, topo):
+        parallel_groups = self.split_context_sharding_comm_list(topo)
+        for group in parallel_groups:
+            if self.global_rank in group:
+                return group.index(self.global_rank)
+        return None
 
     def build_cp_mp_fuse_group(
         self, topo, nccl_config=None
@@ -1363,27 +1420,30 @@ class EPHybridCommunicateGroup(HybridCommunicateGroup):
 
     def get_context_parallel_group(self) -> Group:
         self._check_cp_exist()
+        self._check_comm_group_available("cp_group")
         return self._cp_comm_group
 
     def get_context_parallel_group_src_rank(self) -> int:
         self._check_cp_exist()
-        return self._cp_comm_group.ranks[0]
+        return self.get_context_parallel_group().ranks[0]
 
     def get_cp_sharding_parallel_group(self) -> Group:
         self._check_cp_exist()
+        self._check_comm_group_available("cp_sharding_group")
         return self._cp_sharding_comm_group
 
     def get_cp_sharding_parallel_group_src_rank(self) -> int:
         self._check_cp_exist()
-        return self._cp_sharding_comm_group.ranks[0]
+        return self.get_cp_sharding_parallel_group().ranks[0]
 
     def get_cp_mp_parallel_group(self) -> Group:
         self._check_cp_exist()
+        self._check_comm_group_available("cp_mp_group")
         return self._cp_mp_comm_group
 
     def get_cp_mp_parallel_group_src_rank(self) -> int:
         self._check_cp_exist()
-        return self._cp_mp_comm_group.ranks[0]
+        return self.get_cp_mp_parallel_group().ranks[0]
 
     def get_expert_parallel_rank(self) -> int:
         return self._expert_parallel_id
@@ -1392,10 +1452,11 @@ class EPHybridCommunicateGroup(HybridCommunicateGroup):
         return self._ep_degree
 
     def get_expert_parallel_group(self) -> Group:
+        self._check_comm_group_available("ep_group")
         return self._ep_comm_group
 
     def get_expert_parallel_group_src_rank(self) -> int:
-        return self._ep_comm_group.ranks[0]
+        return self.get_expert_parallel_group().ranks[0]
 
     def get_moe_sharding_parallel_rank(self) -> int:
         return self._moe_sharding_parallel_id
@@ -1404,10 +1465,11 @@ class EPHybridCommunicateGroup(HybridCommunicateGroup):
         return self._moe_sharding_degree
 
     def get_moe_sharding_parallel_group(self) -> Group:
+        self._check_comm_group_available("moe_sharding_group")
         return self._moe_sharding_comm_group
 
     def get_moe_sharding_parallel_group_src_rank(self) -> int:
-        return self._moe_sharding_comm_group.ranks[0]
+        return self.get_moe_sharding_parallel_group().ranks[0]
 
     def get_sharding_parallel_world_size(
         self, with_context_parallel=False
