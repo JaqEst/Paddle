@@ -50,8 +50,9 @@ class ProcessGroupGloo : public ProcessGroupWithoutStream {
 
   class GlooStore : public ::gloo::rendezvous::Store {
    public:
-    explicit GlooStore(const std::shared_ptr<phi::distributed::Store>& store)
-        : _store(store) {}
+    explicit GlooStore(const std::shared_ptr<phi::distributed::Store>& store,
+                       int gid)
+        : _store(store), _prefix("gloo_ids/" + std::to_string(gid) + "/") {}
 
     ~GlooStore() = default;
 
@@ -64,7 +65,10 @@ class ProcessGroupGloo : public ProcessGroupWithoutStream {
               const std::chrono::milliseconds& timeout) override;
 
    protected:
+    std::string JoinKey(const std::string& key) const { return _prefix + key; }
+
     std::shared_ptr<phi::distributed::Store> _store;
+    const std::string _prefix;
   };
 
   class GlooOptions {

@@ -160,7 +160,7 @@ ProcessGroupGloo::ProcessGroupGloo(
     const std::shared_ptr<GlooOptions> options)
     : ProcessGroupWithoutStream(rank, world_size, gid),
       _tag(0),
-      _store(new GlooStore(store)) {
+      _store(new GlooStore(store, gid)) {
   _context = std::make_shared<gloo::rendezvous::Context>(rank, world_size);
   _context->connectFullMesh(*_store, options->device);
 }
@@ -733,14 +733,14 @@ phi::distributed::GlooCommContext* ProcessGroupGloo::GetCommContext() {
 
 std::vector<char> ProcessGroupGloo::GlooStore::get(const std::string& key) {
   VLOG(3) << "GlooStore::get";
-  auto value = _store->get(key);
+  auto value = _store->get(JoinKey(key));
   return std::vector<char>(value.begin(), value.end());
 }
 
 void ProcessGroupGloo::GlooStore::wait(const std::vector<std::string>& keys) {
   VLOG(3) << "GlooStore::wait";
   for (auto& key : keys) {
-    _store->wait(key);
+    _store->wait(JoinKey(key));
   }
 }
 
@@ -748,7 +748,7 @@ void ProcessGroupGloo::GlooStore::set(const std::string& key,
                                       const std::vector<char>& value) {
   VLOG(3) << "GlooStore::set";
   std::vector<uint8_t> tmp(value.begin(), value.end());
-  _store->set(key, tmp);
+  _store->set(JoinKey(key), tmp);
 }
 
 void ProcessGroupGloo::GlooStore::wait(
@@ -756,7 +756,7 @@ void ProcessGroupGloo::GlooStore::wait(
     const std::chrono::milliseconds& timeout) {
   VLOG(3) << "GlooStore::wait";
   for (auto& key : keys) {
-    _store->wait(key);
+    _store->wait(JoinKey(key));
   }
   // wait(keys);
 }
